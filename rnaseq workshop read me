@@ -1,0 +1,338 @@
+Step 1: Set Up the Conda Environment (rnaseq)Create a Conda environment named rnaseq and install all necessary tools for RNA-seq analysis, including those for handling SOLiD data, alignment, quantification, and differential expression.bash
+
+Create and activate the rnaseq environment
+
+
+###
+conda create -n rnaseq 
+
+###
+conda activate rnaseq
+
+Install tools for data download, preprocessing, and analysis
+
+### install channels
+
+conda config --add channels defaults 
+conda config --add channels bioconda conda-forge
+conda config --add channels conda-forge
+
+###install conda qc packages 
+conda install fastp
+conda install fastqc
+conda install multiqc
+
+###mapping tool 
+conda install star 
+
+###conda 
+###
+conda install -c conda-forge wget conda install -c fastqc fastp multiqc star samtools deeptools salmon biosquid conda install -c bioconda 
+
+optional (bioconductor-deseq2 bioconductor-tximport conda install -c r r-ggplot2 r-dplyr conda install -c conda-forge r-irkernel)
+
+
+
+Explanation:Environment: rnaseq includes Python 3.9 for general scripting, R for DESeq2, and Jupyter for the notebook. Tools:wget, sra-tools: For downloading data from ENA. fastqc, multiqc: Quality control. fastp: Read trimming (adapter and quality). star: Read alignment to the genome. samtools: BAM file manipulation. deeptools: Visualization (e.g., coverage plots). salmon: Transcript quantification. biosquid: For potential SOLiD colorspace data handling. DESeq2, tximport, ggplot2, dplyr: Differential expression and visualization in R. IRkernel: Enables R in Jupyter Notebooks.
+
+
+
+Memory Note: STAR requires ~30GB RAM for human genome indexing. Ensure the workshop computer meets this requirement.
+
+Step 2: Set Up Project Directory and Jupyter NotebookCreate a project directory and start Jupyter Notebook.bash
+
+Create project directory
+
+### create working directory with files 
+mkdir -p ~/rnaseq_workshop 
+cd ~/rnaseq_workshop 
+mkdir data raw_data trimmed_data qc_results star_index star_align salmon_index salmon_quant results
+
+
+navigate Jupyter, create cells (Code, Markdown), and switch kernels. Explain that the notebook will mix bash (for preprocessing) and R (for analysis) using %%bash magic.Step 3: Download PRJEB6899 Data from ENAThe PRJEB6899 dataset is available at https://www.ebi.ac.uk/ena/browser/view/PRJEB6899. You need the run accessions (e.g., ERRXXXXXX) for MCF7 and MCFS samples. Since specific run accessions weren’t provided, I’ll use placeholder examples based on typical ENA structure. For the workshop, check the ENA project page or ArrayExpress (E-MTAB-3608) for exact run IDs (e.g., ERR768073–ERR768078, assuming 3 MCF7 and 3 MCFS samples).Download Metadata:bash
+
+###
+cd ~/rnaseq_workshop/data wget https://www.ebi.ac.uk/ena/portal/api/filereport?accession=PRJEB6899&result=read_run&fields=run_accession,sample_accession,library_layout,fastq_ftp&format=tsv -O PRJEB6899_metadata.tsv
+
+Download FASTQ Files:Check the PRJEB6899_metadata.tsv file for fastq_ftp URLs. Example command for paired-end FASTQ files:bash
+
+###
+cd ~/rnaseq_workshop/raw_data
+
+Example: Replace with actual URLs from metadata
+###
+wget ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR768/ERR768073/ERR768073_1.fastq.gz wget ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR768/ERR768073/ERR768073_2.fastq.gz
+
+Repeat for other runs (e.g., ERR768074–ERR768078)
+Alternative: Use sra-tools (if FASTQ URLs are unavailable):bash
+
+
+###
+cd ~/rnaseq_workshop/raw_data fasterq-dump ERR768073 -O . # Repeat for each run gzip *.fastq # Compress to save space
+
+read the metadata file (less PRJEB6899_metadata.tsv) to identify sample conditions (MCF7 vs. MCFS) and library layout (single-end or paired-end). the importance of metadata for biological context.SOLiD Note: If the data is in colorspace (.csfasta/.qual), ENA likely provides FASTQ-converted files. If not, use biosquid for conversion (requires additional setup; contact me if needed).Step 4: Download Reference FilesDownload the human reference genome and transcriptome for alignment and quantification.bash
+
+###
+cd ~/rnaseq_workshop/data wget ftp://ftp.ensembl.org/pub/release-104/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz wget ftp://ftp.ensembl.org/pub/release-104/gtf/homo_sapiens/Homo_sapiens.GRCh38.104.gtf.gz wget ftp://ftp.ensembl.org/pub/release-104/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz gunzip *.gz
+
+role of the reference genome (for alignment) and GTF/transcriptome (for annotation and quantification). Show the file structure with ls -lh.
+
+title: "RNA-seq Analysis Workshop: PRJEB6899 (MCF7 vs. MCFS Breast Cancer)" date: "July 5, 2025" output: html_notebook
+RNA-seq Analysis Workshop: PRJEB6899
+This notebook analyzes RNA-seq data from PRJEB6899 to compare MCF7 breast cancer cells and MCFS mammospheres. We cover quality control, preprocessing, alignment, quantification, and differential expression.
+
+Step 1: Quality Control with FastQC and MultiQC
+Check raw read quality.
+
+###
+mkdir -p ~/rnaseq_workshop/qc_results
+ 
+fastqc ~/rnaseq_workshop/raw_data/*.fastq.gz -o ~/rnaseq_workshop/qc_results multiqc ~/rnaseq_workshop/qc_results -o ~/rnaseq_workshop/qc_results/multiqc
+
+View MultiQC report (open multiqc_report.html in a browser)
+cat ~/rnaseq_workshop/qc_results/multiqc/multiqc_report.html
+
+Step 2: Trim Reads with fastp
+Trim adapters and low-quality bases.
+
+%%bash mkdir -p ~/rnaseq_workshop/trimmed_data for R1 in ~/rnaseq_workshop/raw_data/*_1.fastq.gz; do R2=
+(basename 
+R1 -I 
+{sample}_1.trimmed.fastq.gz
+-O ~/rnaseq_workshop/trimmed_data/
+{sample}_fastp.html
+-j ~/rnaseq_workshop/trimmed_data/${sample}_fastp.json done multiqc ~/rnaseq_workshop/trimmed_data -o ~/rnaseq_workshop/trimmed_data/multiqc
+
+Step 3: Index Genome with STAR
+Create a genome index for alignment.
+
+%%bash mkdir -p ~/rnaseq_workshop/star_index STAR --runThreadN 8 --runMode genomeGenerate
+--genomeDir ~/rnaseq_workshop/star_index
+--genomeFastaFiles ~/rnaseq_workshop/data/Homo_sapiens.GRCh38.dna.primary_assembly.fa
+--sjdbGTFfile ~/rnaseq_workshop/data/Homo_sapiens.GRCh38.104.gtf
+--sjdbOverhang 99
+
+Step 4: Align Reads with STAR
+Align trimmed reads to the genome.
+
+%%bash mkdir -p ~/rnaseq_workshop/star_align for R1 in ~/rnaseq_workshop/trimmed_data/*1.trimmed.fastq.gz; do R2=
+(basename 
+R1 
+{sample}
+--outSAMtype BAM SortedByCoordinate
+--outSAMunmapped Within
+--outSAMattributes Standard done
+
+Step 5: Index BAM Files with samtools
+Index BAM files for downstream analysis.
+
+%%bash for bam in ~/rnaseq_workshop/star_align/*.bam; do samtools index $bam done
+
+Step 6: Index Transcriptome with Salmon
+Create a transcriptome index for quantification.
+
+%%bash mkdir -p ~/rnaseq_workshop/salmon_index salmon index -t ~/rnaseq_workshop/data/Homo_sapiens.GRCh38.cdna.all.fa
+-i ~/rnaseq_workshop/salmon_index
+
+Step 7: Quantify Transcripts with Salmon
+Quantify transcript expression.
+
+%%bash mkdir -p ~/rnaseq_workshop/salmon_quant for R1 in ~/rnaseq_workshop/trimmed_data/*_1.trimmed.fastq.gz; do R2=
+(basename 
+R1 -2 
+{sample} done
+
+Step 8: Differential Expression with DESeq2
+Load and analyze quantification data in R.
+
+# Load libraries
+library(tximport)
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+
+# Set working directory
+setwd("~/rnaseq_workshop")
+
+# Load metadata (adjust based on PRJEB6899_metadata.tsv)
+# Example metadata for 6 samples (3 MCF7, 3 MCFS)
+metadata <- data.frame(
+  sample = c("ERR768073", "ERR768074", "ERR768075", "ERR768076", "ERR768077", "ERR768078"),
+  condition = c("MCF7", "MCF7", "MCF7", "MCFS", "MCFS", "MCFS"),
+  row.names = c("ERR768073", "ERR768074", "ERR768075", "ERR768076", "ERR768077", "ERR768078")
+)
+write.csv(metadata, "data/metadata.csv")
+
+# Import Salmon quantification
+files <- file.path("salmon_quant", metadata$sample, "quant.sf")
+names(files) <- metadata$sample
+txi <- tximport(files, type = "salmon", tx2gene = NULL)
+
+# Create DESeq2 dataset
+dds <- DESeqDataSetFromTximport(txi, colData = metadata, design = ~ condition)
+
+# Filter low-count genes
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+# Run DESeq2
+dds <- DESeq(dds)
+res <- results(dds, contrast = c("condition", "MCFS", "MCF7"))
+
+# Save results
+res_df <- as.data.frame(res)
+write.csv(res_df, "results/deseq2_results.csv")
+
+# Volcano Plot
+res_df$significant <- ifelse(res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 1, "Significant", "Not Significant")
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = significant)) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c("grey", "red")) +
+  theme_minimal() +
+  ggtitle("Volcano Plot: MCFS vs MCF7") +
+  xlab("Log2 Fold Change") + ylab("-Log10 Adjusted P-value")
+ggsave("results/volcano_plot.png")
+
+# Heatmap of top 10 genes
+library(pheatmap)
+top_genes <- res_df[order(res_df$padj), ][1:10, ]
+top_counts <- assay(rlog(dds))[rownames(top_genes), ]
+pheatmap(top_counts, scale = "row", main = "Top 10 DE Genes Heatmap",
+         filename = "results/heatmap.png")
+
+# PCA Plot
+rld <- rlog(dds, blind = TRUE)
+plotPCA(rld, intgroup = "condition") +
+  ggtitle("PCA Plot: MCF7 vs MCFS Samples")
+ggsave("results/pca_plot.png")
+
+# Print top genes
+print("Top 10 Differentially Expressed Genes:")
+print(top_genes[, c("log2FoldChange", "padj")])
+
+
+
+
+
+GIT 
+
+
+
+fastqc <sample>_1.fastq.gz -d . -o .
+
+fastqc <sample>_2.fastq.gz -d . -o .
+
+
+totalreads=$(unzip -c <sample>_fastqc.zip <sample>_fastqc/fastqc_data.txt | grep 'Total Sequences' | cut -f 2)
+
+echo $totalreads
+#This number will be used again later so is saved as a variable 'totalreads
+
+#Change the -l argument to change the minimum read length allowed.
+
+fastp -i <sample>_R1.fastq.gz -I <sample>_R2.fastq.gz -o <sample>_R1.trimmed.fastq.gz -O <sample>_R2.trimmed.fastq.gz --detect_adapter_for_pe -l 25 -j <sample>.fastp.json -h <sample>.fastp.html
+
+'
+
+fastqc <sample>_R1.trimmed.fastq.gz -d . -o .
+
+fastqc <sample>_R2.trimmed.fastq.gz -d . -o .
+
+
+GENOMEDIR=/path/to/indexed/genome
+
+STAR --runThreadN 4 --runMode genomeGenerate --genomeDir $GENOMEDIR --genomeFastaFiles $GENOMEDIR/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna --sjdbGTFfile gencode.v36.annotation.gtf --sjdbOverhang readlength -1
+
+
+STAR --runThreadN 4 --genomeDir $GENOMEDIR --readFilesIn <sample>_R1.trimmed.fastq.gz <sample>_R2.trimmed.fastq.gz
+--outFileNamePrefix <sample> --readFilesCommand zcat --outSAMtype BAM Unsorted --quantTranscriptomeBan Singleend --outFilterType BySJout 
+--alignSJoverhangMin 8 --outFilterMultimapNmax 20
+--alignSJDBoverhangMin 1 --outFilterMismatchNmax 999
+--outFilterMismatchNoverReadLmax 0.04 --alignIntronMin 20 
+--alignIntronMax 1000000 --alignMatesGapMax 1000000 
+--quantMode TranscriptomeSAM --outSAMattributes NH HI AS NM MD
+
+
+#Sort the output bam file. The suffix of the .bam input file may be .gzAligned.out.bam, or -merged.bam. Edit this code to include the appropriate file name.
+samtools sort <sample>.bam > <sample>-sorted.bam
+samtools index <sample>-sorted.bam
+
+samtools flagstat <sample>-sorted.bam > <sample>-sorted.flagstat
+
+#Run qualimap to generate QC reports
+qualimap bamqc -bam <sample>-sorted.bam -gff gencode.v36.annotation.gtf -outdir <sample>-bamqc-qualimap-report --java-mem-size=16G
+
+qualimap rnaseq -bam <sample>-sorted.bam -gtf gencode.v36.annotation.gtf -outdir <sample>-rnaseq-qualimap-report --java-mem-size=16G
+
+
+#The total number of reads mapped
+cat <sample>.flagstat | grep mapped | head -n1 | cut -d ' ' -f1
+
+#The total number of properly paired reads
+cat ../bam_files/061818_con.flagstat | grep 'properly paired' | head -n1 | cut -d ' ' -f1
+
+
+
+gffread -w GRCh38_no_alt_analysis_set_gencode.v36.transcripts.fa -g GCA_000001405.15_GRCh38_no_alt_analysis_set.fna gencode.v36.annotation.gtf
+
+Quantification
+salmon quant -t GRCh38_no_alt_analysis_set_gencode.v36.transcripts.fa --libType A -a <sample>.Aligned.toTranscriptome.out.bam -o <sample>.salmon_quant --gcBias --seqBias
+
+
+
+OWN TERMINAL 
+
+conda install -c conda-forge wget
+
+
+conda install -c bioconda fastp
+
+conda create --name rna_seq -c bioconda -c conda-forge fastp python=3.13 
+
+conda create activate rna_seq
+
+conda create activate rna_seq
+
+rnaseq % 
+fastp \
+  -i ERR571793.fastq.gz \
+  -I ERR571794.fastq.gz \
+  -o trimmed_R1.fastq.gz \
+  -O trimmed_R2.fastq.gz \
+  -j fastp_report.json \
+  -h fastp_report.html \
+  -w 4
+
+
+
+conda install star
+
+mkdir -p reference
+cd reference
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/GRCh38.primary_assembly.genome.fa.gz
+wget ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.annotation.gtf.gz
+gunzip GRCh38.primary_assembly.genome.fa.gz
+gunzip gencode.v47.annotation.gtf.gz
+
+
+mkdir -p reference
+cd reference
+(rna_seq) madanbaral@Madans-MacBook-Pro reference % curl -O ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/GRCh38.primary_assembly.genome.fa.gz
+curl -O ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_47/gencode.v47.annotation.gtf.gz
+
+
+gunzip GRCh38.primary_assembly.genome.fa.gz
+gunzip gencode.v47.annotation.gtf.gz
+
+
+ mkdir -p star_index
+STAR --runThreadN 8 \
+     --runMode genomeGenerate \
+     --genomeDir star_index \
+     --genomeFastaFiles reference/GRCh38.primary_assembly.genome.fa \
+     --sjdbGTFfile reference/gencode.v47.annotation.gtf \
+     --sjdbOverhang 99
+	STAR --runThreadN 8 --runMode genomeGenerate --genomeDir star_index --genomeFastaFiles reference/GRCh38.primary_assembly.genome.fa --sjdbGTFfile reference/gencode.v47.annotation.gtf --sjdbOverhang 99
+
+
+
